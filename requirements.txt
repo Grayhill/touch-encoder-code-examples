@@ -1,0 +1,5 @@
+dataclasses==0.6
+numpy==1.19.2
+py==1.9.0
+pyusb==1.1.0
+virtualenv==20.0.31

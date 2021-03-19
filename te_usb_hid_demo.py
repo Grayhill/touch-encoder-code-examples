@@ -22,8 +22,7 @@ TE_WIDGET_ENDPOINT_OUT = 0x02
 TE_WIDGET_ENDPOINT_IN = 0x82
 TE_USB_WRITE_TIMEOUT = 100
 TE_USB_READ_TIMEOUT = 100
-
-COMMAND_DELAY = .15
+TE_COMMAND_DELAY = .15
 
 """ events report payload structure """
 @dataclass
@@ -81,7 +80,7 @@ class HidInterface:
         self.event_report_thread = None
         self.widget_report_thread = None
 
-    """ read_events_thread(usb_device)
+    """ read_events_thread(self, usb_device)
         Parameters:
             usb_device - USB device in usb.core format
 
@@ -100,7 +99,7 @@ class HidInterface:
                 self.saved_ev_rep = ev_rep
                 print("Event report recieved: %s" % ev_rep)
 
-    """ read_widget_thread(usb_device)
+    """ read_widget_thread(self, usb_device)
         Parameters:
             usb_device - USB device in usb.core format
 
@@ -118,7 +117,53 @@ class HidInterface:
                 self.saved_wi_rep = wi_rep
                 print("Widget report recieved: %s" % wi_rep)
 
-""" send_command(usb_device, cmd)
+    """ check_event_report(self, ev)
+        Parameters:
+            ev - contains events data struct to be checked against a received packet
+
+        checks a recently received events packet to ensure it contains the expected data
+    """
+    def check_event_report(self, ev):
+        if self.events_read:
+            return self.saved_ev_rep[0] == TE_REPORT_ID_EVENTS and \
+                   self.saved_ev_rep[1] == ev.screen_id and \
+                   self.saved_ev_rep[2] == 0 and \
+                   self.saved_ev_rep[3] == ev.event_id and \
+                   self.saved_ev_rep[4] == ev.encoder_val and \
+                   self.saved_ev_rep[5] == ev.tap_mask and \
+                   self.saved_ev_rep[6] == ev.swipe_mask
+        return False
+
+    """ check_widget_report(self, wi)
+        Parameters:
+            wi - contains widget data struct to be checked against a received packet
+
+        checks a recently received widget packet to ensure it contains the expected data
+    """
+    def check_widget_report(self, wi):
+        if wi.mode_code & 0x01 == 0x01:
+            return True
+        if self.widget_read:
+            if self.saved_wi_rep[0] == TE_REPORT_ID_WIDGET_STATUS and \
+                self.saved_wi_rep[1] == wi.screen_id:
+                if wi.active_val_mask & 0x01 == 0x01:
+                    return self.saved_wi_rep[3] == wi.val1_id and \
+                            self.saved_wi_rep[4] == (np.uint16(wi.val1_val) >> 0) & 0xFF and \
+                            self.saved_wi_rep[5] == (np.uint16(wi.val1_val) >> 8) & 0xFF and \
+                            self.saved_wi_rep[6] == wi.val1_disp
+                elif wi.active_val_mask & 0x02 == 0x02:
+                    return self.saved_wi_rep[7] == wi.val2_id and \
+                            self.saved_wi_rep[8] == (np.uint16(wi.val2_val) >> 0) & 0xFF and \
+                            self.saved_wi_rep[9] == (np.uint16(wi.val2_val) >> 8) & 0xFF and \
+                            self.saved_wi_rep[10] == wi.val2_disp
+                elif wi.active_val_mask & 0x04 == 0x04:
+                    return self.saved_wi_rep[11] == wi.val3_id and \
+                            self.saved_wi_rep[12] == (np.uint16(wi.val3_val) >> 0) & 0xFF and \
+                            self.saved_wi_rep[13] == (np.uint16(wi.val3_val) >> 8) & 0xFF and \
+                            self.saved_wi_rep[14] == wi.val2_disp
+        return False
+
+""" send_command(self, usb_device, cmd)
     Parameters:
         usb_device - USB device in usb.core format
         cmd - contains command struct to be made into OUT report payload
@@ -222,7 +267,7 @@ def setup(dev_serial_number=None, hid_interface = HidInterface()):
 
    teardown usb device resources and connection
 """
-def teardown(usb_device = usb.core.find(), hid_interface = HidInterface()):
+def teardown(usb_device, hid_interface):
     """ shut down events & widget endpoint read threads """
     hid_interface.stop_threads = True
     time.sleep(1)
@@ -239,7 +284,7 @@ def teardown(usb_device = usb.core.find(), hid_interface = HidInterface()):
 
     sends a force widget report to the device
 """
-def change_widget_values(hid_interface, usb_device, scrn_vals):
+def change_widget_values(usb_device, hid_interface, scrn_vals):
     for value in range(np.int16(scrn_vals[3]), np.int16(scrn_vals[4]) + 1):
         if scrn_vals[1] == 0x01:
             fw_check = force_widget_payload(scrn_vals[0],
@@ -269,21 +314,21 @@ def change_widget_values(hid_interface, usb_device, scrn_vals):
                                             0)
         update_widget(usb_device,
                       fw_check,
-                      COMMAND_DELAY)
+                      TE_COMMAND_DELAY)
 
-""" test_command(cmd_vals, usb_device)
+""" test_command(usb_device, cmd_vals)
     Parameters:
         cmd_vals - hid_interface obj for device
         usb_device - pyusb device obj to teardown
 
     sends specified command to device
 """
-def test_command(cmd_val, usb_device):
+def test_command(usb_device, cmd_val):
     cmd = command_payload(cmd_val[0],
                           cmd_val[1],
                           0)
     send_command(usb_device, cmd)
-    time.sleep(COMMAND_DELAY)
+    time.sleep(TE_COMMAND_DELAY)
 
 def main():
     print("Starting Demo...")
@@ -298,7 +343,7 @@ def main():
                  [4, 4, 0, 0x8000, 0x801F]]
 
     for vals in scrn_vals:
-        change_widget_values(interface, dev, vals)
+        change_widget_values(dev, interface, vals)
 
     """ cmd_vals - contains the different test iterations for test_command """
     cmd_vals = [[0x80, 10 << 8],
@@ -308,7 +353,7 @@ def main():
                 [0x80, 100 << 8]]
 
     for cmd in cmd_vals:
-        test_command(cmd, dev)
+        test_command(dev, cmd)
 
     teardown(dev, interface)
     del interface
